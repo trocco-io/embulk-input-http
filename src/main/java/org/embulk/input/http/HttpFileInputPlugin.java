@@ -5,6 +5,7 @@ import com.google.common.base.Throwables;
 import com.google.common.collect.Lists;
 import org.apache.commons.io.IOUtils;
 import org.apache.http.Header;
+import org.apache.http.HttpEntity;
 import org.apache.http.NameValuePair;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
@@ -21,6 +22,7 @@ import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.message.BasicHeader;
 import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.util.EntityUtils;
 import org.embulk.config.Config;
 import org.embulk.config.ConfigDefault;
 import org.embulk.config.ConfigDiff;
@@ -37,14 +39,11 @@ import org.embulk.spi.util.InputStreamFileInput;
 import org.embulk.spi.util.RetryExecutor;
 import org.slf4j.Logger;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.URISyntaxException;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -130,9 +129,11 @@ public class HttpFileInputPlugin implements FileInputPlugin {
           .withMaxRetryWait(30 * 60 * 1000)
           .runInterruptible(retryable);
 
-      InputStream stream = retryable.getResponse().getEntity().getContent();
-      if (!task.getInputDirect()) {
-        stream = copyToFile(stream);
+      InputStream stream = null;
+      if (task.getInputDirect()) {
+        stream = retryable.getResponse().getEntity().getContent();
+      } else {
+        stream = convertByteArrayInputStream(retryable.getResponse().getEntity());
       }
 
       PluginFileInput input = new PluginFileInput(task, stream, startTimeMills);
@@ -143,18 +144,9 @@ public class HttpFileInputPlugin implements FileInputPlugin {
     }
   }
 
-  private InputStream copyToFile(InputStream input) throws IOException {
-    File tmpfile = Files.createTempFile("embulk-input-http.", ".tmp").toFile();
-    tmpfile.deleteOnExit();
-
-    try (FileOutputStream output = new FileOutputStream(tmpfile)) {
-      logger.info(format(Locale.ENGLISH, "Writing response to %s", tmpfile));
-      IOUtils.copy(input, output);
-    } finally {
-      input.close();
-    }
-
-    return new FileInputStream(tmpfile);
+  private InputStream convertByteArrayInputStream(HttpEntity httpEntity) throws IOException {
+    String responseData = EntityUtils.toString(httpEntity);
+    return new ByteArrayInputStream(responseData.getBytes());
   }
 
   private CredentialsProvider makeCredentialsProvider(
